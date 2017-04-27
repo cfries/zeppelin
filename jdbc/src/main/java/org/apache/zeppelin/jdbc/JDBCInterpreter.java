@@ -57,9 +57,7 @@ import org.apache.zeppelin.user.UsernamePassword;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.base.Function;
 import com.google.common.base.Throwables;
-import com.google.common.collect.Lists;
 
 import static org.apache.commons.lang.StringUtils.containsIgnoreCase;
 import static org.apache.commons.lang.StringUtils.isEmpty;
@@ -103,6 +101,7 @@ public class JDBCInterpreter extends Interpreter {
   static final String USER_KEY = "user";
   static final String PASSWORD_KEY = "password";
   static final String PRECODE_KEY = "precode";
+  static final String COMPLETER_SCHEMA_FILTERS_KEY = "completer.schemaFilters";
   static final String JDBC_JCEKS_FILE = "jceks.file";
   static final String JDBC_JCEKS_CREDENTIAL_KEY = "jceks.credentialKey";
   static final String PRECODE_KEY_TEMPLATE = "%s.precode";
@@ -130,22 +129,12 @@ public class JDBCInterpreter extends Interpreter {
 
   private final HashMap<String, Properties> basePropretiesMap;
   private final HashMap<String, JDBCUserConfigurations> jdbcUserConfigurationsMap;
-  private final Map<String, SqlCompleter> propertyKeySqlCompleterMap;
 
-  private static final Function<CharSequence, InterpreterCompletion> sequenceToStringTransformer =
-      new Function<CharSequence, InterpreterCompletion>() {
-        public InterpreterCompletion apply(CharSequence seq) {
-          return new InterpreterCompletion(seq.toString(), seq.toString());
-        }
-      };
-
-  private static final List<InterpreterCompletion> NO_COMPLETION = new ArrayList<>();
   private int maxLineResults;
 
   public JDBCInterpreter(Properties property) {
     super(property);
     jdbcUserConfigurationsMap = new HashMap<>();
-    propertyKeySqlCompleterMap = new HashMap<>();
     basePropretiesMap = new HashMap<>();
     maxLineResults = MAX_LINE_DEFAULT;
   }
@@ -160,7 +149,7 @@ public class JDBCInterpreter extends Interpreter {
       logger.debug("propertyKey: {}", propertyKey);
       String[] keyValue = propertyKey.split("\\.", 2);
       if (2 == keyValue.length) {
-        logger.info("key: {}, value: {}", keyValue[0], keyValue[1]);
+        logger.debug("key: {}, value: {}", keyValue[0], keyValue[1]);
 
         Properties prefixProperties;
         if (basePropretiesMap.containsKey(keyValue[0])) {
@@ -193,9 +182,7 @@ public class JDBCInterpreter extends Interpreter {
     if (!isEmpty(property.getProperty("zeppelin.jdbc.auth.type"))) {
       JDBCSecurityImpl.createSecureConfiguration(property);
     }
-    for (String propertyKey : basePropretiesMap.keySet()) {
-      propertyKeySqlCompleterMap.put(propertyKey, createSqlCompleter(null));
-    }
+
     setMaxLineResults();
   }
 
@@ -206,10 +193,11 @@ public class JDBCInterpreter extends Interpreter {
     }
   }
 
-  private SqlCompleter createSqlCompleter(Connection jdbcConnection) {
-
+  private SqlCompleter createSqlCompleter(Connection jdbcConnection, String propertyKey) {
+    String schemaFiltersKey = String.format("%s.%s", propertyKey, COMPLETER_SCHEMA_FILTERS_KEY);
+    String filters = getProperty(schemaFiltersKey);
     SqlCompleter completer = new SqlCompleter();
-    completer.initFromConnection(jdbcConnection, "");
+    completer.initFromConnection(jdbcConnection, filters);
     return completer;
   }
 
@@ -261,6 +249,7 @@ public class JDBCInterpreter extends Interpreter {
 
   private boolean existAccountInBaseProperty(String propertyKey) {
     return basePropretiesMap.get(propertyKey).containsKey(USER_KEY) &&
+        !isEmpty((String) basePropretiesMap.get(propertyKey).get(USER_KEY)) &&
         basePropretiesMap.get(propertyKey).containsKey(PASSWORD_KEY);
   }
 
@@ -307,7 +296,6 @@ public class JDBCInterpreter extends Interpreter {
       }
     }
     jdbcUserConfigurations.setPropertyMap(propertyKey, basePropretiesMap.get(propertyKey));
-
     if (existAccountInBaseProperty(propertyKey)) {
       return;
     }
@@ -425,7 +413,7 @@ public class JDBCInterpreter extends Interpreter {
             connection = getConnectionFromPool(url, user, propertyKey, properties);
       }
     }
-    propertyKeySqlCompleterMap.put(propertyKey, createSqlCompleter(connection));
+
     return connection;
   }
 
@@ -508,19 +496,36 @@ public class JDBCInterpreter extends Interpreter {
   protected ArrayList<String> splitSqlQueries(String sql) {
     ArrayList<String> queries = new ArrayList<>();
     StringBuilder query = new StringBuilder();
-    Character character;
+    char character;
 
     Boolean antiSlash = false;
+    Boolean multiLineComment = false;
+    Boolean singleLineComment = false;
     Boolean quoteString = false;
     Boolean doubleQuoteString = false;
 
     for (int item = 0; item < sql.length(); item++) {
       character = sql.charAt(item);
 
-      if (character.equals('\\')) {
+      if ((singleLineComment && (character == '\n' || item == sql.length() - 1))
+          || (multiLineComment && character == '/' && sql.charAt(item - 1) == '*')) {
+        singleLineComment = false;
+        multiLineComment = false;
+        if (item == sql.length() - 1 && query.length() > 0) {
+          queries.add(StringUtils.trim(query.toString()));
+        }
+        continue;
+      }
+
+      if (singleLineComment || multiLineComment) {
+        continue;
+      }
+
+      if (character == '\\') {
         antiSlash = true;
       }
-      if (character.equals('\'')) {
+
+      if (character == '\'') {
         if (antiSlash) {
           antiSlash = false;
         } else if (quoteString) {
@@ -529,7 +534,8 @@ public class JDBCInterpreter extends Interpreter {
           quoteString = true;
         }
       }
-      if (character.equals('"')) {
+
+      if (character == '"') {
         if (antiSlash) {
           antiSlash = false;
         } else if (doubleQuoteString) {
@@ -539,16 +545,30 @@ public class JDBCInterpreter extends Interpreter {
         }
       }
 
-      if (character.equals(';') && !antiSlash && !quoteString && !doubleQuoteString) {
-        queries.add(query.toString());
+      if (!quoteString && !doubleQuoteString && !multiLineComment && !singleLineComment
+          && sql.length() > item + 1) {
+        if (character == '-' && sql.charAt(item + 1) == '-') {
+          singleLineComment = true;
+          continue;
+        }
+
+        if (character == '/' && sql.charAt(item + 1) == '*') {
+          multiLineComment = true;
+          continue;
+        }
+      }
+
+      if (character == ';' && !antiSlash && !quoteString && !doubleQuoteString) {
+        queries.add(StringUtils.trim(query.toString()));
         query = new StringBuilder();
       } else if (item == sql.length() - 1) {
         query.append(character);
-        queries.add(query.toString());
+        queries.add(StringUtils.trim(query.toString()));
       } else {
         query.append(character);
       }
     }
+
     return queries;
   }
 
@@ -556,7 +576,7 @@ public class JDBCInterpreter extends Interpreter {
     String precode = getProperty(String.format(PRECODE_KEY_TEMPLATE, propertyKey));
     if (StringUtils.isNotBlank(precode)) {
       precode = StringUtils.trim(precode);
-      logger.info("Run SQL precode '{}'", precode);
+      logger.debug("Run SQL precode '{}'", precode);
       try (Statement statement = connection.createStatement()) {
         statement.execute(precode);
         if (!connection.getAutoCommit()) {
@@ -700,7 +720,7 @@ public class JDBCInterpreter extends Interpreter {
 
   @Override
   public InterpreterResult interpret(String cmd, InterpreterContext contextInterpreter) {
-    logger.info("Run SQL command '{}'", cmd);
+    logger.debug("Run SQL command '{}'", cmd);
     String propertyKey = getPropertyKey(cmd);
 
     if (null != propertyKey && !propertyKey.equals(DEFAULT_KEY)) {
@@ -708,8 +728,7 @@ public class JDBCInterpreter extends Interpreter {
     }
 
     cmd = cmd.trim();
-
-    logger.info("PropertyKey: {}, SQL command: '{}'", propertyKey, cmd);
+    logger.debug("PropertyKey: {}, SQL command: '{}'", propertyKey, cmd);
     return executeSql(propertyKey, cmd, contextInterpreter);
   }
 
@@ -762,18 +781,26 @@ public class JDBCInterpreter extends Interpreter {
   }
 
   @Override
-  public List<InterpreterCompletion> completion(String buf, int cursor) {
-    List<CharSequence> candidates = new ArrayList<>();
-    SqlCompleter sqlCompleter = propertyKeySqlCompleterMap.get(getPropertyKey(buf));
-    // It's strange but here cursor comes with additional +1 (even if buf is "" cursor = 1)
-    if (sqlCompleter != null && sqlCompleter.complete(buf, cursor - 1, candidates) >= 0) {
-      List<InterpreterCompletion> completion;
-      completion = Lists.transform(candidates, sequenceToStringTransformer);
-
-      return completion;
-    } else {
-      return NO_COMPLETION;
+  public List<InterpreterCompletion> completion(String buf, int cursor,
+      InterpreterContext interpreterContext) {
+    List<InterpreterCompletion> candidates = new ArrayList<>();
+    String propertyKey = getPropertyKey(buf);
+    Connection connection = null;
+    try {
+      if (interpreterContext != null) {
+        connection = getConnection(propertyKey, interpreterContext);
+      }
+    } catch (ClassNotFoundException | SQLException | IOException e) {
+      logger.warn("SQLCompleter will created without use connection");
     }
+
+    SqlCompleter sqlCompleter = createSqlCompleter(connection, propertyKey);
+
+    if (sqlCompleter != null) {
+      sqlCompleter.complete(buf, cursor - 1, candidates);
+    }
+
+    return candidates;
   }
 
   public int getMaxResult() {
