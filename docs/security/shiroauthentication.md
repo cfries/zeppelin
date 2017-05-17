@@ -78,13 +78,14 @@ activeDirectoryRealm.searchBase = CN=Users,DC=SOME_GROUP,DC=COMPANY,DC=COM
 activeDirectoryRealm.url = ldap://ldap.test.com:389
 activeDirectoryRealm.groupRolesMap = "CN=aGroupName,OU=groups,DC=SOME_GROUP,DC=COMPANY,DC=COM":"group1"
 activeDirectoryRealm.authorizationCachingEnabled = false
+activeDirectoryRealm.principalSuffix = @corp.company.net
 
 ldapRealm = org.apache.zeppelin.server.LdapGroupRealm
 # search base for ldap groups (only relevant for LdapGroupRealm):
 ldapRealm.contextFactory.environment[ldap.searchBase] = dc=COMPANY,dc=COM
 ldapRealm.contextFactory.url = ldap://ldap.test.com:389
 ldapRealm.userDnTemplate = uid={0},ou=Users,dc=COMPANY,dc=COM
-ldapRealm.contextFactory.authenticationMechanism = SIMPLE
+ldapRealm.contextFactory.authenticationMechanism = simple
 ```
 
 also define roles/groups that you want to have in system, like below;
@@ -114,6 +115,7 @@ activeDirectoryRealm.searchBase = CN=Users,DC=SOME_GROUP,DC=COMPANY,DC=COM
 activeDirectoryRealm.url = ldap://ldap.test.com:389
 activeDirectoryRealm.groupRolesMap = "CN=aGroupName,OU=groups,DC=SOME_GROUP,DC=COMPANY,DC=COM":"group1"
 activeDirectoryRealm.authorizationCachingEnabled = false
+activeDirectoryRealm.principalSuffix = @corp.company.net
 ```
 
 
@@ -132,7 +134,7 @@ ldapRealm = org.apache.zeppelin.realm.LdapGroupRealm
 ldapRealm.contextFactory.environment[ldap.searchBase] = dc=COMPANY,dc=COM
 ldapRealm.contextFactory.url = ldap://ldap.test.com:389
 ldapRealm.userDnTemplate = uid={0},ou=Users,dc=COMPANY,dc=COM
-ldapRealm.contextFactory.authenticationMechanism = SIMPLE
+ldapRealm.contextFactory.authenticationMechanism = simple
 ```
 
 ### PAM

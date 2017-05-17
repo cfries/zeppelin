@@ -68,7 +68,8 @@ InsertLiveReloadPlugin.prototype.apply = function apply(compiler) {
  */
 var ENV = process.env.npm_lifecycle_event;
 var isTest = ENV === 'test';
-var isProd = ENV === 'build';
+var isProd = ENV.startsWith('build')
+var isCI = ENV === 'build:ci'
 
 module.exports = function makeWebpackConfig () {
   /**
@@ -139,6 +140,11 @@ module.exports = function makeWebpackConfig () {
   config.module = {
     preLoaders: [],
     loaders: [{
+      // headroom 0.9.3 doesn't work with webpack
+      // https://github.com/WickyNilliams/headroom.js/issues/213#issuecomment-281106943
+      test: require.resolve('headroom.js'),
+      loader: 'imports-loader?this=>window,define=>false,exports=>false'
+    }, {
       // JS LOADER
       // Reference: https://github.com/babel/babel-loader
       // Transpile .js files using babel-loader
@@ -159,7 +165,7 @@ module.exports = function makeWebpackConfig () {
       //
       // Reference: https://github.com/webpack/style-loader
       // Use style-loader in development.
-      loader: isTest ? 'null' : ExtractTextPlugin.extract('style-loader', 'css-loader?sourceMap!postcss-loader')
+      loader: ExtractTextPlugin.extract('style-loader', 'css-loader?sourceMap!postcss-loader')
     }, {
       // ASSET LOADER
       // Reference: https://github.com/webpack/file-loader
@@ -209,6 +215,10 @@ module.exports = function makeWebpackConfig () {
    * List: http://webpack.github.io/docs/list-of-plugins.html
    */
   config.plugins = [
+      // Reference: https://github.com/webpack/extract-text-webpack-plugin
+      // Extract css files
+      // Disabled when in test mode or not in build mode
+      new ExtractTextPlugin('[name].[hash].css', {disable: !isProd}),
   ];
 
   // Skip rendering index.html in test mode
@@ -221,17 +231,13 @@ module.exports = function makeWebpackConfig () {
         inject: 'body'
       }),
 
-      // Reference: https://github.com/webpack/extract-text-webpack-plugin
-      // Extract css files
-      // Disabled when in test mode or not in build mode
-      new ExtractTextPlugin('[name].[hash].css', {disable: !isProd}),
-
       // Reference: https://webpack.github.io/docs/list-of-plugins.html#defineplugin
       new webpack.DefinePlugin({
         'process.env': {
           HELIUM_BUNDLE_DEV: process.env.HELIUM_BUNDLE_DEV,
           SERVER_PORT: serverPort,
-          WEB_PORT: webPort
+          WEB_PORT: webPort,
+          BUILD_CI: (isCI) ? JSON.stringify(true) : JSON.stringify(false)
         }
       })
     )
